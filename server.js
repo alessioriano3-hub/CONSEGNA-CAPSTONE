@@ -5,19 +5,25 @@ const mongoose = require('mongoose');
 const { login } = require('./src/auth');
 const api = require('./src/routes');
 
-if (!process.env.MONGODB_URI || !process.env.JWT_SECRET) {
-  console.error('Imposta MONGODB_URI e JWT_SECRET nel file .env (vedi .env.example)');
-  process.exit(1);
-}
-
 const app = express();
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Connessione al database riusata tra le richieste (serve su Vercel)
+let connessione = null;
+function connetti() {
+  if (!connessione) connessione = mongoose.connect(process.env.MONGODB_URI);
+  return connessione;
+}
+app.use(async (req, res, next) => {
+  try { await connetti(); next(); }
+  catch (e) { connessione = null; next(e); }
+});
+
 app.post('/api/auth/login', login);
 app.use('/api', api);
 app.use('/api', (req, res) => res.status(404).json({ message: 'Risorsa non trovata' }));
 
-// Gestione centralizzata degli errori: ogni errore diventa una risposta JSON leggibile
 app.use((err, req, res, next) => {
   let status = err.status || 500;
   let message = err.message;
@@ -28,7 +34,12 @@ app.use((err, req, res, next) => {
   res.status(status).json({ message });
 });
 
-const PORT = process.env.PORT || 3000;
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => { console.log('MongoDB connesso'); app.listen(PORT, () => console.log('App su http://localhost:' + PORT)); })
-  .catch((e) => { console.error('Connessione a MongoDB fallita:', e.message); process.exit(1); });
+// In locale: node server.js avvia il server. Su Vercel il file viene solo importato.
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  connetti()
+    .then(() => { console.log('MongoDB connesso'); app.listen(PORT, () => console.log('App su http://localhost:' + PORT)); })
+    .catch((e) => { console.error('Connessione a MongoDB fallita:', e.message); process.exit(1); });
+}
+
+module.exports = app;
